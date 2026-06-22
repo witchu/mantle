@@ -747,17 +747,19 @@ pub async fn import_graph(
     let game_passes = roblox_api.get_all_game_passes(target_id).await?;
     for pass in game_passes {
         resources.push(RobloxResource::existing(
-            &format!("pass_{}", pass.target_id),
+            &format!("pass_{}", pass.game_pass_id),
             RobloxInputs::Pass(PassInputs {
                 name: pass.name,
                 description: pass.description,
-                price: pass.price_in_robux,
+                price: pass
+                    .price_information
+                    .and_then(|price_information| price_information.default_price_in_robux),
                 icon_file_path: "fake-path".to_owned(),
                 icon_file_hash: "fake-hash".to_owned(),
             }),
             RobloxOutputs::Pass(PassOutputs {
-                asset_id: pass.target_id,
-                icon_asset_id: pass.icon_image_asset_id,
+                asset_id: pass.game_pass_id,
+                icon_asset_id: pass.icon_asset_id,
             }),
             &[&experience],
         ));

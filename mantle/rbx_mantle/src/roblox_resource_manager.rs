@@ -16,7 +16,7 @@ use rbx_api::{
     badges::models::CreateBadgeResponse,
     developer_products::models::DeveloperProductConfigV2,
     experiences::models::{CreateExperienceResponse, ExperienceConfigurationModel},
-    game_passes::models::{CreateGamePassResponse, GetGamePassResponse},
+    game_passes::models::GamePassConfigV2,
     models::{AssetId, AssetTypeId, CreatorType, UploadImageResponse},
     notifications::models::CreateNotificationResponse,
     places::models::PlaceConfigurationModel,
@@ -590,32 +590,24 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
             RobloxInputs::Pass(inputs) => {
                 let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
 
-                let CreateGamePassResponse { game_pass_id } = self
-                    .roblox_api
-                    .create_game_pass(
-                        experience.asset_id,
-                        inputs.name.clone(),
-                        inputs.description.clone(),
-                        self.get_path(inputs.icon_file_path),
-                    )
-                    .await?;
-                let GetGamePassResponse {
-                    icon_image_asset_id,
+                let GamePassConfigV2 {
+                    game_pass_id,
+                    icon_asset_id,
                     ..
                 } = self
                     .roblox_api
-                    .update_game_pass(
-                        game_pass_id,
+                    .create_game_pass(
+                        experience.asset_id,
                         inputs.name,
-                        inputs.description,
                         inputs.price,
-                        None,
+                        inputs.description,
+                        self.get_path(inputs.icon_file_path),
                     )
                     .await?;
 
                 Ok(RobloxOutputs::Pass(PassOutputs {
                     asset_id: game_pass_id,
-                    icon_asset_id: icon_image_asset_id,
+                    icon_asset_id,
                 }))
             }
             RobloxInputs::Badge(inputs) => {
@@ -853,12 +845,11 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                 Ok(RobloxOutputs::Product(outputs))
             }
             (RobloxInputs::Pass(inputs), RobloxOutputs::Pass(outputs)) => {
-                let GetGamePassResponse {
-                    icon_image_asset_id,
-                    ..
-                } = self
-                    .roblox_api
+                let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
+
+                self.roblox_api
                     .update_game_pass(
+                        experience.asset_id,
                         outputs.asset_id,
                         inputs.name,
                         inputs.description,
@@ -869,7 +860,7 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
 
                 Ok(RobloxOutputs::Pass(PassOutputs {
                     asset_id: outputs.asset_id,
-                    icon_asset_id: icon_image_asset_id,
+                    icon_asset_id: outputs.icon_asset_id,
                 }))
             }
             (RobloxInputs::Badge(inputs), RobloxOutputs::Badge(outputs)) => {
@@ -1054,9 +1045,12 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                     .await?;
             }
             RobloxOutputs::Pass(outputs) => {
+                let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
+
                 let utc = Utc::now();
                 self.roblox_api
                     .update_game_pass(
+                        experience.asset_id,
                         outputs.asset_id,
                         format!("zzz_DEPRECATED({})", utc.format("%F %T%.f")),
                         "".to_owned(),
