@@ -197,11 +197,9 @@ pub async fn get_state_from_source(
                 ResourceStateV4::from(ResourceStateV3::from(state)),
             )))
         }
-        Some(ResourceState::Versioned(VersionedResourceState::V3(state))) => {
-            ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(
-                ResourceStateV4::from(state),
-            )))
-        }
+        Some(ResourceState::Versioned(VersionedResourceState::V3(state))) => ResourceStateV7::from(
+            ResourceStateV6::from(ResourceStateV5::from(ResourceStateV4::from(state))),
+        ),
         Some(ResourceState::Versioned(VersionedResourceState::V4(state))) => {
             ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(state)))
         }

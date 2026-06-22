@@ -10,3 +10,10 @@ directories:
 - [examples](examples/README.md): example Mantle projects.
 
 For more information about the project, visit the [docs site](https://mantledeploy.vercel.app).
+
+## API References
+
+Below are the links to the OpenAPI/JSON specifications for the Roblox Cloud APIs:
+
+- [Roblox Game Passes API Specification (v1)](https://github.com/Roblox/creator-docs/blob/main/content/en-us/reference/cloud/game-passes-http-service/v1.json)
+- [Roblox Developer Products API Specification (v1)](https://github.com/Roblox/creator-docs/blob/main/content/en-us/reference/cloud/developer-products-api/v1.json)
