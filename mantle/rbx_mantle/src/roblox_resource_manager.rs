@@ -14,10 +14,7 @@ use rbx_api::{
     },
     assets::models::{CreateAssetQuota, CreateAudioAssetResponse, Creator, QuotaDuration},
     badges::models::CreateBadgeResponse,
-    developer_products::models::{
-        CreateDeveloperProductIconResponse, CreateDeveloperProductResponse,
-        GetDeveloperProductResponse,
-    },
+    developer_products::models::DeveloperProductConfigV2,
     experiences::models::{CreateExperienceResponse, ExperienceConfigurationModel},
     game_passes::models::{CreateGamePassResponse, GetGamePassResponse},
     models::{AssetId, AssetTypeId, CreatorType, UploadImageResponse},
@@ -79,6 +76,8 @@ pub struct ProductInputs {
     pub name: String,
     pub description: String,
     pub price: u32,
+    pub icon_file_path: Option<String>,
+    pub icon_file_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -566,40 +565,26 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
 
                 Ok(RobloxOutputs::SocialLink(AssetOutputs { asset_id: id }))
             }
-            RobloxInputs::ProductIcon(inputs) => {
-                let product = single_output!(dependency_outputs, RobloxOutputs::Product);
-
-                let CreateDeveloperProductIconResponse { image_asset_id } = self
-                    .roblox_api
-                    .create_developer_product_icon(
-                        product.asset_id,
-                        self.get_path(inputs.file_path),
-                    )
-                    .await?;
-
-                Ok(RobloxOutputs::ProductIcon(AssetOutputs {
-                    asset_id: image_asset_id,
-                }))
+            RobloxInputs::ProductIcon(_) => {
+                unreachable!("ProductIcon is folded into Product by the v7 state migration")
             }
             RobloxInputs::Product(inputs) => {
                 let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
 
-                let CreateDeveloperProductResponse { id } = self
+                let DeveloperProductConfigV2 { product_id, .. } = self
                     .roblox_api
                     .create_developer_product(
                         experience.asset_id,
                         inputs.name,
                         inputs.price,
                         inputs.description,
+                        inputs.icon_file_path.map(|path| self.get_path(path)),
                     )
                     .await?;
 
-                let GetDeveloperProductResponse { id: product_id } =
-                    self.roblox_api.get_developer_product(id).await?;
-
                 Ok(RobloxOutputs::Product(ProductOutputs {
                     asset_id: product_id,
-                    product_id: id,
+                    product_id,
                 }))
             }
             RobloxInputs::Pass(inputs) => {
@@ -848,7 +833,7 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                 Ok(RobloxOutputs::SocialLink(outputs))
             }
             (RobloxInputs::ProductIcon(_), RobloxOutputs::ProductIcon(_)) => {
-                self.create(inputs, dependency_outputs, price).await
+                unreachable!("ProductIcon is folded into Product by the v7 state migration")
             }
             (RobloxInputs::Product(inputs), RobloxOutputs::Product(outputs)) => {
                 let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
@@ -860,6 +845,8 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                         inputs.name,
                         inputs.price,
                         inputs.description,
+                        true,
+                        inputs.icon_file_path.map(|path| self.get_path(path)),
                     )
                     .await?;
 
@@ -1061,6 +1048,8 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                         format!("zzz_DEPRECATED({})", utc.format("%F %T%.f")),
                         0,
                         "".to_owned(),
+                        false,
+                        None,
                     )
                     .await?;
             }

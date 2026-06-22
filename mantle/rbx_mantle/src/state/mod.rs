@@ -6,6 +6,7 @@ pub mod v3;
 pub mod v4;
 pub mod v5;
 pub mod v6;
+pub mod v7;
 
 use std::{
     collections::BTreeMap,
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use v6::ResourceStateV6;
+use v7::ResourceStateV7;
 use yansi::Paint;
 
 use super::{
@@ -66,9 +68,11 @@ enum VersionedResourceState {
     V5(ResourceStateV5),
     #[serde(rename = "6")]
     V6(ResourceStateV6),
+    #[serde(rename = "7")]
+    V7(ResourceStateV7),
 }
 
-pub type ResourceStateVLatest = ResourceStateV6;
+pub type ResourceStateVLatest = ResourceStateV7;
 
 fn get_state_file_path(project_path: &Path, key: Option<&str>) -> PathBuf {
     project_path.join(format!("{}.mantle-state.yml", key.unwrap_or_default()))
@@ -178,27 +182,36 @@ pub async fn get_state_from_source(
 
     // Migrate previous state formats
     Ok(match state {
-        Some(ResourceState::Unversioned(state)) => ResourceStateV6::from(ResourceStateV5::from(
-            ResourceStateV4::from(ResourceStateV3::from(ResourceStateV2::from(state))),
-        )),
-        Some(ResourceState::Versioned(VersionedResourceState::V1(state))) => {
-            ResourceStateV6::from(ResourceStateV5::from(ResourceStateV4::from(
-                ResourceStateV3::from(ResourceStateV2::from(state)),
+        Some(ResourceState::Unversioned(state)) => {
+            ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(
+                ResourceStateV4::from(ResourceStateV3::from(ResourceStateV2::from(state))),
             )))
         }
-        Some(ResourceState::Versioned(VersionedResourceState::V2(state))) => ResourceStateV6::from(
-            ResourceStateV5::from(ResourceStateV4::from(ResourceStateV3::from(state))),
-        ),
+        Some(ResourceState::Versioned(VersionedResourceState::V1(state))) => {
+            ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(
+                ResourceStateV4::from(ResourceStateV3::from(ResourceStateV2::from(state))),
+            )))
+        }
+        Some(ResourceState::Versioned(VersionedResourceState::V2(state))) => {
+            ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(
+                ResourceStateV4::from(ResourceStateV3::from(state)),
+            )))
+        }
         Some(ResourceState::Versioned(VersionedResourceState::V3(state))) => {
-            ResourceStateV6::from(ResourceStateV5::from(ResourceStateV4::from(state)))
+            ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(
+                ResourceStateV4::from(state),
+            )))
         }
         Some(ResourceState::Versioned(VersionedResourceState::V4(state))) => {
-            ResourceStateV6::from(ResourceStateV5::from(state))
+            ResourceStateV7::from(ResourceStateV6::from(ResourceStateV5::from(state)))
         }
         Some(ResourceState::Versioned(VersionedResourceState::V5(state))) => {
-            ResourceStateV6::from(state)
+            ResourceStateV7::from(ResourceStateV6::from(state))
         }
-        Some(ResourceState::Versioned(VersionedResourceState::V6(state))) => state,
+        Some(ResourceState::Versioned(VersionedResourceState::V6(state))) => {
+            ResourceStateV7::from(state)
+        }
+        Some(ResourceState::Versioned(VersionedResourceState::V7(state))) => state,
         None => ResourceStateVLatest {
             environments: BTreeMap::new(),
         },
@@ -382,28 +395,25 @@ fn get_desired_experience_graph(
 
     if let Some(products) = &target_config.products {
         for (label, product) in products {
-            let product_resource = RobloxResource::new(
+            let (icon_file_path, icon_file_hash) = match &product.icon {
+                Some(icon_path) => (
+                    Some(icon_path.clone()),
+                    Some(get_file_hash(project_path.join(icon_path))?),
+                ),
+                None => (None, None),
+            };
+
+            resources.push(RobloxResource::new(
                 &format!("product_{}", label),
                 RobloxInputs::Product(ProductInputs {
                     name: product.name.clone(),
                     description: product.description.clone().unwrap_or_default(),
                     price: product.price,
+                    icon_file_path,
+                    icon_file_hash,
                 }),
                 &[&experience],
-            );
-
-            if let Some(icon_path) = &product.icon {
-                resources.push(RobloxResource::new(
-                    &format!("productIcon_{}", label),
-                    RobloxInputs::ProductIcon(FileInputs {
-                        file_path: icon_path.clone(),
-                        file_hash: get_file_hash(project_path.join(icon_path))?,
-                    }),
-                    &[&product_resource],
-                ));
-            }
-
-            resources.push(product_resource);
+            ));
         }
     }
 
@@ -708,31 +718,29 @@ pub async fn import_graph(
     logger::log("Importing products");
     let developer_products = roblox_api.get_all_developer_products(target_id).await?;
     for product in developer_products {
-        let product_resource = RobloxResource::existing(
+        let (icon_file_path, icon_file_hash) = match product.icon_image_asset_id {
+            Some(_) => (Some("fake-path".to_owned()), Some("fake-hash".to_owned())),
+            None => (None, None),
+        };
+
+        resources.push(RobloxResource::existing(
             &format!("product_{}", product.product_id),
             RobloxInputs::Product(ProductInputs {
                 name: product.name,
                 description: product.description.unwrap_or_default(),
-                price: product.price_in_robux,
+                price: product
+                    .price_information
+                    .and_then(|price_information| price_information.default_price_in_robux)
+                    .unwrap_or(0),
+                icon_file_path,
+                icon_file_hash,
             }),
             RobloxOutputs::Product(ProductOutputs {
                 asset_id: product.product_id,
-                product_id: product.developer_product_id,
+                product_id: product.product_id,
             }),
             &[&experience],
-        );
-        if let Some(icon_id) = product.icon_image_asset_id {
-            resources.push(RobloxResource::existing(
-                &format!("productIcon_{}", product.product_id),
-                RobloxInputs::ProductIcon(FileInputs {
-                    file_path: "fake-path".to_owned(),
-                    file_hash: "fake-hash".to_owned(),
-                }),
-                RobloxOutputs::ProductIcon(AssetOutputs { asset_id: icon_id }),
-                &[&product_resource],
-            ));
-        }
-        resources.push(product_resource);
+        ));
     }
 
     logger::log("Importing passes");
@@ -917,7 +925,7 @@ fn serialize_state(state: &ResourceStateVLatest) -> Result<Vec<u8>, String> {
                                 utc.format("%FT%TZ")
                             ).as_bytes().to_vec();
 
-    let state_data = serde_yaml::to_vec(&ResourceState::Versioned(VersionedResourceState::V6(
+    let state_data = serde_yaml::to_vec(&ResourceState::Versioned(VersionedResourceState::V7(
         state.to_owned(),
     )))
     .map_err(|e| format!("Unable to serialize state\n\t{}", e))?;

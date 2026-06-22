@@ -237,6 +237,8 @@ impl From<ResourceStateV2> for ResourceStateV3 {
                                 name: input_value!(resource, "name"),
                                 description: input_value!(resource, "description"),
                                 price: input_value!(resource, "price"),
+                                icon_file_path: None,
+                                icon_file_hash: None,
                             }),
                             RobloxOutputs::Product(ProductOutputs {
                                 asset_id: output_value!(resource, "assetId"),
