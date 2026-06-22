@@ -19,7 +19,7 @@ rbx_cookie = { path = "../rbx_cookie", version = "0.1.5", default-features = fal
 thiserror = "1.0.31"
 
 url = { version = "2.2.2" }
-reqwest = { version = "0.11.6", features = ["cookies", "json"] }
+reqwest = { version = "0.11.27", features = ["cookies", "json"] }
 
 log = "0.4.14"
 env_logger = { version = "0.9.0", optional = true }
