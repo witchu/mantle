@@ -53,7 +53,7 @@ impl RobloxApi {
         experience_id: AssetId,
         product_id: AssetId,
         name: String,
-        price: u32,
+        price: Option<u32>,
         description: String,
         is_for_sale: bool,
         icon_file: Option<PathBuf>,
@@ -64,8 +64,10 @@ impl RobloxApi {
                 let mut form = Form::new()
                     .text("name", name.clone())
                     .text("description", description.clone())
-                    .text("isForSale", is_for_sale.to_string())
-                    .text("price", price.to_string());
+                    .text("isForSale", is_for_sale.to_string());
+                if let Some(price) = price {
+                    form = form.text("price", price.to_string());
+                }
                 if let Some(icon_file) = &icon_file {
                     form = form.part("imageFile", get_file_part(icon_file).await?);
                 }
