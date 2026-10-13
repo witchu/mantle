@@ -785,8 +785,7 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
     ) -> Result<RobloxOutputs, String> {
         match (inputs.clone(), outputs.clone()) {
             (RobloxInputs::Experience(_), RobloxOutputs::Experience(_)) => {
-                self.delete(outputs, dependency_outputs.clone()).await?;
-                self.create(inputs, dependency_outputs, price).await
+                unreachable!("Experience is replaced by the resource graph")
             }
             (RobloxInputs::ExperienceConfiguration(_), RobloxOutputs::ExperienceConfiguration) => {
                 self.create(inputs, dependency_outputs, price).await
@@ -798,8 +797,7 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                 self.create(inputs, dependency_outputs, price).await
             }
             (RobloxInputs::ExperienceThumbnail(_), RobloxOutputs::ExperienceThumbnail(_)) => {
-                self.delete(outputs, dependency_outputs.clone()).await?;
-                self.create(inputs, dependency_outputs, price).await
+                unreachable!("ExperienceThumbnail is replaced by the resource graph")
             }
             (RobloxInputs::ExperienceThumbnailOrder, RobloxOutputs::ExperienceThumbnailOrder) => {
                 self.create(inputs, dependency_outputs, price).await
@@ -1126,7 +1124,10 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
     }
 
     fn replaces_on_update(&self, inputs: &RobloxInputs) -> bool {
-        matches!(inputs, RobloxInputs::ExperienceThumbnail(_))
+        matches!(
+            inputs,
+            RobloxInputs::Experience(_) | RobloxInputs::ExperienceThumbnail(_)
+        )
     }
 }
 

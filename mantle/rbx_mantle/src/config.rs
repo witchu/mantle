@@ -40,6 +40,10 @@ pub struct Config {
     /// owner:
     ///   group: 5723117
     /// ```
+    ///
+    /// Changing the owner of an existing deployment archives its experience and creates a new one.
+    /// If creating the new experience fails, the archived experience and its resources are removed
+    /// from the state file, and a new experience will be created on the next deployment.
     #[serde(default)]
     pub owner: OwnerConfig,
 
