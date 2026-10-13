@@ -285,6 +285,7 @@ impl From<ResourceStateV2> for ResourceStateV3 {
                                 },
                             }),
                             RobloxOutputs::Pass(PassOutputs {
+                                icon_file_hash: None,
                                 asset_id: output_value!(resource, "assetId"),
                                 icon_asset_id: if let Some(icon_resource) = icon_resource {
                                     output_value!(icon_resource, "assetId")

@@ -840,6 +840,7 @@ pub async fn import_graph(
                 icon_file_hash: "fake-hash".to_owned(),
             }),
             RobloxOutputs::Pass(PassOutputs {
+                icon_file_hash: None,
                 asset_id: pass.game_pass_id,
                 icon_asset_id: pass.icon_asset_id,
             }),

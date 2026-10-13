@@ -190,6 +190,10 @@ pub struct ProductOutputs {
 pub struct PassOutputs {
     pub asset_id: AssetId,
     pub icon_asset_id: AssetId,
+    /// The hash of the icon file which was last uploaded. Used to skip uploading the icon again when
+    /// only other properties change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_file_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -613,6 +617,7 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                 Ok(RobloxOutputs::Pass(PassOutputs {
                     asset_id: game_pass_id,
                     icon_asset_id,
+                    icon_file_hash: Some(inputs.icon_file_hash),
                 }))
             }
             RobloxInputs::Badge(inputs) => {
@@ -850,6 +855,9 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
             (RobloxInputs::Pass(inputs), RobloxOutputs::Pass(outputs)) => {
                 let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
 
+                let icon_changed =
+                    outputs.icon_file_hash.as_deref() != Some(inputs.icon_file_hash.as_str());
+
                 self.roblox_api
                     .update_game_pass(
                         experience.asset_id,
@@ -857,13 +865,32 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
                         inputs.name,
                         inputs.description,
                         inputs.price,
-                        Some(self.get_path(inputs.icon_file_path)),
+                        icon_changed.then(|| self.get_path(&inputs.icon_file_path)),
                     )
                     .await?;
 
+                // The update response does not include the new icon's ID, so look it up
+                let icon_asset_id = if icon_changed {
+                    self.roblox_api
+                        .get_all_game_passes(experience.asset_id)
+                        .await?
+                        .into_iter()
+                        .find(|pass| pass.game_pass_id == outputs.asset_id)
+                        .map(|pass| pass.icon_asset_id)
+                        .ok_or_else(|| {
+                            format!(
+                                "Unable to find game pass {} after updating it",
+                                outputs.asset_id
+                            )
+                        })?
+                } else {
+                    outputs.icon_asset_id
+                };
+
                 Ok(RobloxOutputs::Pass(PassOutputs {
                     asset_id: outputs.asset_id,
-                    icon_asset_id: outputs.icon_asset_id,
+                    icon_asset_id,
+                    icon_file_hash: Some(inputs.icon_file_hash),
                 }))
             }
             (RobloxInputs::Badge(inputs), RobloxOutputs::Badge(outputs)) => {

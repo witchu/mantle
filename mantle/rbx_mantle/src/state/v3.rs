@@ -63,6 +63,7 @@ impl From<ResourceStateV3> for ResourceStateV4 {
                                             price: inputs.price,
                                         }),
                                         RobloxOutputs::Pass(PassOutputs {
+                                            icon_file_hash: None,
                                             asset_id: outputs.asset_id,
                                             icon_asset_id: icon_outputs.asset_id,
                                         }),
@@ -82,6 +83,7 @@ impl From<ResourceStateV3> for ResourceStateV4 {
                                     price: inputs.price,
                                 }),
                                 RobloxOutputs::Pass(PassOutputs {
+                                    icon_file_hash: None,
                                     asset_id: outputs.asset_id,
                                     icon_asset_id: outputs.initial_icon_asset_id,
                                 }),
