@@ -396,6 +396,11 @@ pub struct ExperienceTargetConfig {
 
     /// An array of file paths to images that will be used as the experience's thumbnails. The order
     /// used here will be the order they appear on the Roblox webpage.
+    ///
+    /// When a thumbnail file changes, Mantle deletes the old thumbnail before uploading the new one
+    /// so the experience never exceeds Roblox's thumbnail limit. If the upload fails (e.g. due to
+    /// rate limiting), the thumbnail is removed from the state file and will be uploaded on the
+    /// next deployment.
     pub thumbnails: Option<Vec<String>>,
 
     /// A list of social links that will appear on the experience's webpage.

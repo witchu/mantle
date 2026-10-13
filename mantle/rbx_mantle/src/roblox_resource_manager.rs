@@ -15,6 +15,7 @@ use rbx_api::{
     assets::models::{CreateAssetQuota, CreateAudioAssetResponse, Creator, QuotaDuration},
     badges::models::CreateBadgeResponse,
     developer_products::models::DeveloperProductConfigV2,
+    errors::RobloxApiError,
     experiences::models::{CreateExperienceResponse, ExperienceConfigurationModel},
     game_passes::models::GamePassConfigV2,
     models::{AssetId, AssetTypeId, CreatorType, UploadImageResponse},
@@ -997,9 +998,24 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
             RobloxOutputs::ExperienceThumbnail(outputs) => {
                 let experience = single_output!(dependency_outputs, RobloxOutputs::Experience);
 
-                self.roblox_api
+                match self
+                    .roblox_api
                     .delete_experience_thumbnail(experience.asset_id, outputs.asset_id)
-                    .await?;
+                    .await
+                {
+                    // The thumbnail no longer exists (e.g. it was deleted by a previous run which
+                    // failed to save its state), so there is nothing left to delete.
+                    Err(RobloxApiError::Roblox {
+                        status_code,
+                        reason,
+                    }) if matches!(status_code.as_u16(), 400 | 404) => {
+                        logger::log(Paint::yellow(format!(
+                            "Thumbnail {} was not found and is treated as deleted: {}",
+                            outputs.asset_id, reason
+                        )));
+                    }
+                    result => result?,
+                }
             }
             RobloxOutputs::ExperienceThumbnailOrder => {}
             RobloxOutputs::Place(outputs) => {
@@ -1103,6 +1119,10 @@ impl ResourceManager<RobloxInputs, RobloxOutputs> for RobloxResourceManager {
             }
         }
         Ok(())
+    }
+
+    fn replaces_on_update(&self, inputs: &RobloxInputs) -> bool {
+        matches!(inputs, RobloxInputs::ExperienceThumbnail(_))
     }
 }
 

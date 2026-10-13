@@ -87,6 +87,13 @@ pub trait ResourceManager<TInputs, TOutputs> {
         outputs: TOutputs,
         dependency_outputs: Vec<TOutputs>,
     ) -> Result<(), String>;
+
+    /// Whether updating a resource with these inputs means deleting the existing resource and
+    /// creating a new one. The graph then runs the delete and create steps itself, so it knows
+    /// the old resource is gone if the create step fails.
+    fn replaces_on_update(&self, _inputs: &TInputs) -> bool {
+        false
+    }
 }
 
 #[derive(Default, Clone)]
@@ -102,6 +109,8 @@ enum OperationResult<TOutputs> {
     Skipped(String),
     Noop,
     Failed(String),
+    /// The previous resource was deleted as part of a replacement, but creating the new one failed.
+    FailedAfterDelete(String),
     SucceededDelete,
     SucceededCreate(TOutputs),
     SucceededUpdate(TOutputs),
@@ -288,12 +297,7 @@ where
                 // The resource was not evaluated. If the resource existed previously, we will copy
                 // the old version into this graph. Otherwise, we will remove this resource from the
                 // graph.
-                if let Some(previous_resource) = previous_graph.resources.get(resource_id) {
-                    self.resources
-                        .insert(resource_id.to_owned(), previous_resource.to_owned());
-                } else {
-                    self.resources.remove(resource_id);
-                }
+                self.restore_previous_resource(previous_graph, resource_id);
 
                 results.skipped_count += 1;
                 logger::end_action(format!("Skipped: {}", Paint::yellow(reason)));
@@ -302,15 +306,46 @@ where
                 // An error occurred while creating or updating the resource. If the
                 // resource existed previously, we will copy the old version into this
                 // graph. Otherwise, we will remove this resource from the graph.
-                if let Some(previous_resource) = previous_graph.resources.get(resource_id) {
-                    self.resources
-                        .insert(resource_id.to_owned(), previous_resource.to_owned());
-                } else {
-                    self.resources.remove(resource_id);
-                }
+                self.restore_previous_resource(previous_graph, resource_id);
 
                 *failures_count += 1;
                 logger::end_action(format!("Failed: {}", Paint::red(error)));
+            }
+            OperationResult::FailedAfterDelete(error) => {
+                // The previous resource no longer exists, so it must not be copied back into this
+                // graph. Removing it means it will be created on the next evaluation.
+                self.resources.remove(resource_id);
+
+                *failures_count += 1;
+                logger::end_action(format!(
+                    "Failed after deleting the previous resource: {}",
+                    Paint::red(error)
+                ));
+            }
+        }
+    }
+
+    /// Copies the previous version of a resource into this graph, or removes the resource if it
+    /// did not exist previously. The previous version is also removed if any of its dependencies
+    /// are no longer in this graph, since a resource with missing dependencies cannot be evaluated
+    /// on the next run.
+    fn restore_previous_resource(
+        &mut self,
+        previous_graph: &ResourceGraph<TResource, TInputs, TOutputs>,
+        resource_id: &str,
+    ) {
+        match previous_graph.resources.get(resource_id) {
+            Some(previous_resource)
+                if previous_resource
+                    .get_dependencies()
+                    .iter()
+                    .all(|dependency| self.resources.contains_key(dependency)) =>
+            {
+                self.resources
+                    .insert(resource_id.to_owned(), previous_resource.to_owned());
+            }
+            _ => {
+                self.resources.remove(resource_id);
             }
         }
     }
@@ -457,6 +492,19 @@ where
                 Err(error) => return OperationResult::Failed(error),
                 Ok(_) => None,
             };
+
+            if manager.replaces_on_update(&resource.get_inputs()) {
+                if let Err(error) = manager.delete(outputs, dependency_outputs.clone()).await {
+                    return OperationResult::Failed(error);
+                }
+                return match manager
+                    .create(resource.get_inputs(), dependency_outputs, price)
+                    .await
+                {
+                    Ok(outputs) => OperationResult::SucceededUpdate(outputs),
+                    Err(error) => OperationResult::FailedAfterDelete(error),
+                };
+            }
 
             match manager
                 .update(resource.get_inputs(), outputs, dependency_outputs, price)
@@ -766,10 +814,17 @@ mod tests {
     }
 
     /// Creates produce outputs equal to `out:<inputs>`. Inputs listed in `fail_create` fail.
+    /// Resources whose inputs start with `replace:` are replaced on update.
     #[derive(Default)]
     struct TestManager {
         fail_create: Vec<String>,
         calls: Mutex<Vec<String>>,
+    }
+
+    impl TestManager {
+        fn take_calls(&self) -> Vec<String> {
+            std::mem::take(&mut *self.calls.lock().unwrap())
+        }
     }
 
     #[async_trait]
@@ -832,6 +887,10 @@ mod tests {
                 .push(format!("delete:{}", outputs.0));
             Ok(())
         }
+
+        fn replaces_on_update(&self, inputs: &TestInputs) -> bool {
+            inputs.0.starts_with("replace:")
+        }
     }
 
     type TestGraph = ResourceGraph<TestResource, TestInputs, TestOutputs>;
@@ -864,5 +923,129 @@ mod tests {
             Some(TestOutputs("out:v1".to_owned()))
         );
         assert!(!next.resources.contains_key("placeFile_new"));
+    }
+
+    #[tokio::test]
+    async fn removes_replaced_resource_and_dependents_when_create_fails_after_delete() {
+        let previous = TestGraph::new(&[
+            TestResource::new("root", "root", Some("out:root"), &[]),
+            TestResource::new("thumb", "replace:a1", Some("out:replace:a1"), &["root"]),
+            TestResource::new("order", "order", Some("out:order"), &["root", "thumb"]),
+        ]);
+        let desired = [
+            TestResource::new("root", "root", None, &[]),
+            TestResource::new("thumb", "replace:a2", None, &["root"]),
+            TestResource::new("order", "order", None, &["root", "thumb"]),
+        ];
+        let mut next = TestGraph::new(&desired);
+        let mut manager = TestManager {
+            fail_create: vec!["replace:a2".to_owned()],
+            ..Default::default()
+        };
+
+        let result = next.evaluate(&previous, &mut manager, false, &[]).await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            manager.take_calls(),
+            vec!["delete:out:replace:a1", "create:replace:a2"]
+        );
+        // The deleted resource must not be restored, and neither may resources depending on it
+        assert!(!next.resources.contains_key("thumb"));
+        assert!(!next.resources.contains_key("order"));
+
+        // The saved state can be evaluated again, recreating both resources
+        let saved = TestGraph::new(&next.get_resource_list());
+        let mut next = TestGraph::new(&desired);
+        manager.fail_create.clear();
+
+        let results = next
+            .evaluate(&saved, &mut manager, false, &[])
+            .await
+            .unwrap();
+
+        assert_eq!(results.created_count, 2);
+        assert_eq!(
+            manager.take_calls(),
+            vec!["create:replace:a2", "create:order"]
+        );
+    }
+
+    #[tokio::test]
+    async fn restores_replaced_resource_when_delete_fails() {
+        struct FailingDeleteManager(TestManager);
+
+        #[async_trait]
+        impl ResourceManager<TestInputs, TestOutputs> for FailingDeleteManager {
+            async fn get_create_price(
+                &self,
+                inputs: TestInputs,
+                dependency_outputs: Vec<TestOutputs>,
+            ) -> Result<Option<u32>, String> {
+                self.0.get_create_price(inputs, dependency_outputs).await
+            }
+            async fn create(
+                &self,
+                inputs: TestInputs,
+                dependency_outputs: Vec<TestOutputs>,
+                price: Option<u32>,
+            ) -> Result<TestOutputs, String> {
+                self.0.create(inputs, dependency_outputs, price).await
+            }
+            async fn get_update_price(
+                &self,
+                inputs: TestInputs,
+                outputs: TestOutputs,
+                dependency_outputs: Vec<TestOutputs>,
+            ) -> Result<Option<u32>, String> {
+                self.0
+                    .get_update_price(inputs, outputs, dependency_outputs)
+                    .await
+            }
+            async fn update(
+                &self,
+                inputs: TestInputs,
+                outputs: TestOutputs,
+                dependency_outputs: Vec<TestOutputs>,
+                price: Option<u32>,
+            ) -> Result<TestOutputs, String> {
+                self.0
+                    .update(inputs, outputs, dependency_outputs, price)
+                    .await
+            }
+            async fn delete(
+                &self,
+                _outputs: TestOutputs,
+                _dependency_outputs: Vec<TestOutputs>,
+            ) -> Result<(), String> {
+                Err("500 Internal Server Error".to_owned())
+            }
+            fn replaces_on_update(&self, inputs: &TestInputs) -> bool {
+                self.0.replaces_on_update(inputs)
+            }
+        }
+
+        let previous = TestGraph::new(&[
+            TestResource::new("root", "root", Some("out:root"), &[]),
+            TestResource::new("thumb", "replace:a1", Some("out:replace:a1"), &["root"]),
+        ]);
+        let mut next = TestGraph::new(&[
+            TestResource::new("root", "root", None, &[]),
+            TestResource::new("thumb", "replace:a2", None, &["root"]),
+        ]);
+        let mut manager = FailingDeleteManager(TestManager::default());
+
+        assert!(next
+            .evaluate(&previous, &mut manager, false, &[])
+            .await
+            .is_err());
+
+        // The previous resource still exists, so it is kept as-is
+        let resource = next.resources.get("thumb").unwrap();
+        assert_eq!(
+            resource.get_outputs(),
+            Some(TestOutputs("out:replace:a1".to_owned()))
+        );
+        assert!(manager.0.take_calls().is_empty());
     }
 }
