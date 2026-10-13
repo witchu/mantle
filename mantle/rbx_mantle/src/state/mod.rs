@@ -659,6 +659,269 @@ pub async fn reconcile_thumbnails(
     Ok(())
 }
 
+const DEPRECATED_NAME_PREFIX: &str = "zzz_DEPRECATED";
+
+/// Returns the remote resources which can be adopted for a resource named `name`: those with
+/// exactly the same name which are not already tracked and not deprecated by Mantle, oldest first.
+fn match_untracked_by_name<'a, T>(
+    remote: &'a [T],
+    tracked_ids: &[AssetId],
+    name: &str,
+    id_of: impl Fn(&T) -> AssetId,
+    name_of: impl Fn(&T) -> &str,
+) -> Vec<&'a T> {
+    let mut candidates: Vec<&T> = remote
+        .iter()
+        .filter(|item| !tracked_ids.contains(&id_of(item)))
+        .filter(|item| {
+            let item_name = name_of(item);
+            item_name == name && !item_name.starts_with(DEPRECATED_NAME_PREFIX)
+        })
+        .collect();
+    candidates.sort_by_key(|item| id_of(item));
+    candidates
+}
+
+/// Picks the resource to adopt from the candidates and records it as tracked. Returns `None` if
+/// there are no candidates.
+fn pick_candidate<'a, T>(
+    kind: &str,
+    resource_id: &str,
+    candidates: Vec<&'a T>,
+    tracked_ids: &mut Vec<AssetId>,
+    id_of: impl Fn(&T) -> AssetId,
+) -> Option<&'a T> {
+    let (chosen, others) = candidates.split_first()?;
+    let chosen_id = id_of(chosen);
+    tracked_ids.push(chosen_id);
+
+    logger::log(Paint::yellow(format!(
+        "Adopting existing {} {} ({}) instead of creating a new one",
+        kind, chosen_id, resource_id
+    )));
+    if !others.is_empty() {
+        logger::log(Paint::yellow(format!(
+            "Other untracked {}(s) with the same name were left unchanged: {}",
+            kind,
+            others
+                .iter()
+                .map(|other| id_of(other).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+
+    Some(chosen)
+}
+
+/// Adopts developer products, game passes and badges which exist on Roblox but are missing from the
+/// previous graph (e.g. because a previous deployment created them but failed to save its state).
+///
+/// For each resource in the desired graph which would otherwise be created, an untracked resource
+/// on Roblox with exactly the same name is added to the previous graph instead. Its inputs are
+/// taken from Roblox with fake file hashes, so it will be updated to match the configuration.
+pub async fn adopt_untracked_resources(
+    roblox_api: &RobloxApi,
+    previous_graph: &mut ResourceGraph<RobloxResource, RobloxInputs, RobloxOutputs>,
+    desired_graph: &ResourceGraph<RobloxResource, RobloxInputs, RobloxOutputs>,
+) -> Result<(), String> {
+    let experience = match previous_graph.get_resource("experience_singleton") {
+        Some(resource) => resource.clone(),
+        None => {
+            logger::log("No existing experience to reconcile");
+            return Ok(());
+        }
+    };
+    let experience_id = match experience.get_outputs() {
+        Some(RobloxOutputs::Experience(outputs)) => outputs.asset_id,
+        _ => return Ok(()),
+    };
+
+    let pending: Vec<RobloxResource> = desired_graph
+        .get_resource_list()
+        .into_iter()
+        .filter(|resource| previous_graph.get_resource(&resource.get_id()).is_none())
+        .filter(|resource| {
+            matches!(
+                resource.get_inputs(),
+                RobloxInputs::Product(_) | RobloxInputs::Pass(_) | RobloxInputs::Badge(_)
+            )
+        })
+        .collect();
+    if pending.is_empty() {
+        logger::log("No products, passes or badges to adopt");
+        return Ok(());
+    }
+
+    let mut tracked_products = Vec::new();
+    let mut tracked_passes = Vec::new();
+    let mut tracked_badges = Vec::new();
+    for resource in previous_graph.get_resource_list() {
+        match resource.get_outputs() {
+            Some(RobloxOutputs::Product(outputs)) => tracked_products.push(outputs.asset_id),
+            Some(RobloxOutputs::Pass(outputs)) => tracked_passes.push(outputs.asset_id),
+            Some(RobloxOutputs::Badge(outputs)) => tracked_badges.push(outputs.asset_id),
+            _ => {}
+        }
+    }
+
+    let mut products = None;
+    let mut passes = None;
+    let mut badges = None;
+    let pending_count = pending.len();
+    let mut adopted_count = 0;
+
+    for resource in pending {
+        let resource_id = resource.get_id();
+        match resource.get_inputs() {
+            RobloxInputs::Product(inputs) => {
+                if products.is_none() {
+                    products = Some(roblox_api.get_all_developer_products(experience_id).await?);
+                }
+                let candidates = match_untracked_by_name(
+                    products.as_deref().unwrap(),
+                    &tracked_products,
+                    &inputs.name,
+                    |product| product.product_id,
+                    |product| &product.name,
+                );
+                if let Some(product) = pick_candidate(
+                    "product",
+                    &resource_id,
+                    candidates,
+                    &mut tracked_products,
+                    |product| product.product_id,
+                ) {
+                    let (icon_file_path, icon_file_hash) = match product.icon_image_asset_id {
+                        Some(_) => (Some("fake-path".to_owned()), Some("fake-hash".to_owned())),
+                        None => (None, None),
+                    };
+                    previous_graph.insert_resource(RobloxResource::existing(
+                        &resource_id,
+                        RobloxInputs::Product(ProductInputs {
+                            name: product.name.clone(),
+                            description: product.description.clone().unwrap_or_default(),
+                            price: product
+                                .price_information
+                                .as_ref()
+                                .and_then(|price_information| {
+                                    price_information.default_price_in_robux
+                                })
+                                .unwrap_or(0),
+                            icon_file_path,
+                            icon_file_hash,
+                        }),
+                        RobloxOutputs::Product(ProductOutputs {
+                            asset_id: product.product_id,
+                            product_id: product.product_id,
+                        }),
+                        &[&experience],
+                    ));
+                    adopted_count += 1;
+                }
+            }
+            RobloxInputs::Pass(inputs) => {
+                if passes.is_none() {
+                    passes = Some(roblox_api.get_all_game_passes(experience_id).await?);
+                }
+                let candidates = match_untracked_by_name(
+                    passes.as_deref().unwrap(),
+                    &tracked_passes,
+                    &inputs.name,
+                    |pass| pass.game_pass_id,
+                    |pass| &pass.name,
+                );
+                if let Some(pass) = pick_candidate(
+                    "pass",
+                    &resource_id,
+                    candidates,
+                    &mut tracked_passes,
+                    |pass| pass.game_pass_id,
+                ) {
+                    previous_graph.insert_resource(RobloxResource::existing(
+                        &resource_id,
+                        RobloxInputs::Pass(PassInputs {
+                            name: pass.name.clone(),
+                            description: pass.description.clone(),
+                            price: pass
+                                .price_information
+                                .as_ref()
+                                .and_then(|price_information| {
+                                    price_information.default_price_in_robux
+                                }),
+                            icon_file_path: "fake-path".to_owned(),
+                            icon_file_hash: "fake-hash".to_owned(),
+                        }),
+                        RobloxOutputs::Pass(PassOutputs {
+                            asset_id: pass.game_pass_id,
+                            icon_asset_id: pass.icon_asset_id,
+                            icon_file_hash: None,
+                        }),
+                        &[&experience],
+                    ));
+                    adopted_count += 1;
+                }
+            }
+            RobloxInputs::Badge(inputs) => {
+                if badges.is_none() {
+                    badges = Some(roblox_api.get_all_badges(experience_id).await?);
+                }
+                let candidates = match_untracked_by_name(
+                    badges.as_deref().unwrap(),
+                    &tracked_badges,
+                    &inputs.name,
+                    |badge| badge.id,
+                    |badge| &badge.name,
+                );
+                if let Some(badge) = pick_candidate(
+                    "badge",
+                    &resource_id,
+                    candidates,
+                    &mut tracked_badges,
+                    |badge| badge.id,
+                ) {
+                    let badge_resource = RobloxResource::existing(
+                        &resource_id,
+                        RobloxInputs::Badge(BadgeInputs {
+                            name: badge.name.clone(),
+                            description: badge.description.clone().unwrap_or_default(),
+                            enabled: badge.enabled,
+                            icon_file_path: "fake-path".to_owned(),
+                        }),
+                        RobloxOutputs::Badge(AssetWithInitialIconOutputs {
+                            asset_id: badge.id,
+                            initial_icon_asset_id: badge.icon_image_id,
+                        }),
+                        &[&experience],
+                    );
+                    let icon_resource_id = resource_id.replacen("badge_", "badgeIcon_", 1);
+                    previous_graph.insert_resource(RobloxResource::existing(
+                        &icon_resource_id,
+                        RobloxInputs::BadgeIcon(FileInputs {
+                            file_path: "fake-path".to_owned(),
+                            file_hash: "fake-hash".to_owned(),
+                        }),
+                        RobloxOutputs::BadgeIcon(AssetOutputs {
+                            asset_id: badge.icon_image_id,
+                        }),
+                        &[&badge_resource],
+                    ));
+                    previous_graph.insert_resource(badge_resource);
+                    adopted_count += 1;
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    logger::log(format!(
+        "Adopted {} of {} product(s), pass(es) and badge(s) which would have been created",
+        adopted_count, pending_count
+    ));
+
+    Ok(())
+}
+
 pub async fn import_graph(
     roblox_api: &RobloxApi,
     target_id: AssetId,
@@ -1031,5 +1294,76 @@ pub async fn save_state(
         StateConfig::Local => save_state_to_file(project_path, &data, None),
         StateConfig::LocalKey(key) => save_state_to_file(project_path, &data, Some(key)),
         StateConfig::Remote(config) => save_state_to_remote(config, &data).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Item(AssetId, &'static str);
+
+    fn ids(items: Vec<&Item>) -> Vec<AssetId> {
+        items.iter().map(|item| item.0).collect()
+    }
+
+    fn matches(remote: &[Item], tracked_ids: &[AssetId], name: &str) -> Vec<AssetId> {
+        ids(match_untracked_by_name(
+            remote,
+            tracked_ids,
+            name,
+            |item| item.0,
+            |item| item.1,
+        ))
+    }
+
+    #[test]
+    fn matches_exact_names_only() {
+        let remote = [Item(1, "Coins"), Item(2, "coins"), Item(3, "Coins 2")];
+        assert_eq!(matches(&remote, &[], "Coins"), vec![1]);
+    }
+
+    #[test]
+    fn orders_duplicate_names_oldest_first() {
+        let remote = [Item(30, "Coins"), Item(10, "Coins"), Item(20, "Coins")];
+        assert_eq!(matches(&remote, &[], "Coins"), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn skips_tracked_resources() {
+        let remote = [Item(1, "Coins"), Item(2, "Coins")];
+        assert_eq!(matches(&remote, &[1], "Coins"), vec![2]);
+    }
+
+    #[test]
+    fn skips_deprecated_resources() {
+        let remote = [Item(1, "zzz_DEPRECATED(2024-01-01 00:00:00)")];
+        assert!(matches(&remote, &[], "zzz_DEPRECATED(2024-01-01 00:00:00)").is_empty());
+    }
+
+    #[test]
+    fn picking_a_candidate_marks_it_as_tracked() {
+        let remote = [Item(1, "Coins"), Item(2, "Coins")];
+        let mut tracked_ids = Vec::new();
+
+        let candidates = match_untracked_by_name(&remote, &tracked_ids, "Coins", |i| i.0, |i| i.1);
+        let chosen = pick_candidate("product", "product_a", candidates, &mut tracked_ids, |i| {
+            i.0
+        });
+        assert_eq!(chosen.map(|item| item.0), Some(1));
+
+        // A second resource with the same name adopts the next candidate
+        let candidates = match_untracked_by_name(&remote, &tracked_ids, "Coins", |i| i.0, |i| i.1);
+        let chosen = pick_candidate("product", "product_b", candidates, &mut tracked_ids, |i| {
+            i.0
+        });
+        assert_eq!(chosen.map(|item| item.0), Some(2));
+
+        let candidates = match_untracked_by_name(&remote, &tracked_ids, "Coins", |i| i.0, |i| i.1);
+        assert!(
+            pick_candidate("product", "product_c", candidates, &mut tracked_ids, |i| i
+                .0)
+            .is_none()
+        );
     }
 }

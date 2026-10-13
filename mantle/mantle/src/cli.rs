@@ -31,6 +31,10 @@ fn get_app() -> App<'static, 'static> {
                         .long("skip-place-files")
                         .help("Skips publishing place files. Other resources are deployed as usual."))
                 .arg(
+                    Arg::with_name("reconcile")
+                        .long("reconcile")
+                        .help("Compares resources on Roblox with the state file before deploying. Reconciles thumbnails like --reconcile-thumbnails, and adopts developer products, game passes and badges which exist on Roblox with the same name instead of creating new ones."))
+                .arg(
                     Arg::with_name("reconcile_thumbnails")
                         .long("reconcile-thumbnails")
                         .help("Compares the experience's thumbnails on Roblox with the state file before deploying. Thumbnails missing from Roblox are uploaded again, and thumbnails missing from the state file are reported."))
@@ -188,6 +192,7 @@ pub async fn run_with(args: Vec<String>) -> i32 {
                 deploy_matches.value_of("environment"),
                 deploy_matches.is_present("allow_purchases"),
                 deploy_matches.is_present("skip_place_files"),
+                deploy_matches.is_present("reconcile"),
                 deploy_matches.is_present("reconcile_thumbnails"),
                 deploy_matches.is_present("prune_thumbnails"),
             )

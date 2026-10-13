@@ -149,6 +149,14 @@ where
         }
     }
 
+    pub fn get_resource(&self, resource_id: &str) -> Option<&TResource> {
+        self.resources.get(resource_id)
+    }
+
+    pub fn insert_resource(&mut self, resource: TResource) {
+        self.resources.insert(resource.get_id(), resource);
+    }
+
     pub fn remove_resource(&mut self, resource_id: &str) -> Option<TResource> {
         self.resources.remove(resource_id)
     }

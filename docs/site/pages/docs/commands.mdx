@@ -46,6 +46,30 @@ mantle deploy --environment staging --prune-thumbnails
   uploaded manually through the Creator Dashboard.
 </Callout>
 
+### Reconciling all resources
+
+Pass `--reconcile` to reconcile thumbnails (like `--reconcile-thumbnails`) and to adopt developer
+products, game passes and badges which exist on Roblox but are missing from the state file. This can
+happen when a deployment creates them but fails before saving its state, for example when it is
+cancelled or Roblox returns an error after creating the resource. Without `--reconcile`, the next
+deployment would create them again.
+
+Before deploying, Mantle looks for each product, pass and badge it is about to create on Roblox. If
+an untracked one has exactly the same name, Mantle adds it to the state file and updates it to
+match your configuration instead of creating a new one. If there are several, the oldest one is
+adopted. Resources deprecated by Mantle (named `zzz_DEPRECATED(...)`) are never adopted.
+
+```sh
+mantle deploy --environment staging --reconcile
+```
+
+Combine it with `--prune-thumbnails` to also delete untracked thumbnails.
+
+<Callout type="warning">
+  Resources created outside of Mantle are adopted too if their name matches your configuration,
+  and are then updated to match it.
+</Callout>
+
 ## Outputs
 
 If you want to know the ID of a resource which Mantle created so you can reference it in your game,

@@ -125,6 +125,7 @@ pub async fn run(
     environment: Option<&str>,
     allow_purchases: bool,
     skip_place_files: bool,
+    reconcile: bool,
     reconcile_thumbnails: bool,
     prune_thumbnails: bool,
 ) -> i32 {
@@ -175,12 +176,29 @@ pub async fn run(
         }
     };
 
-    if reconcile_thumbnails || prune_thumbnails {
+    if reconcile || reconcile_thumbnails || prune_thumbnails {
         logger::start_action("Reconciling thumbnails:");
         match state::reconcile_thumbnails(
             resource_manager.roblox_api(),
             &mut current_graph,
             prune_thumbnails,
+        )
+        .await
+        {
+            Ok(()) => logger::end_action("Succeeded"),
+            Err(e) => {
+                logger::end_action(Paint::red(e));
+                return 1;
+            }
+        }
+    }
+
+    if reconcile {
+        logger::start_action("Adopting untracked resources:");
+        match state::adopt_untracked_resources(
+            resource_manager.roblox_api(),
+            &mut current_graph,
+            &next_graph,
         )
         .await
         {
