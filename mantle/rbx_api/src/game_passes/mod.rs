@@ -50,7 +50,12 @@ impl RobloxApi {
             let res = self.list_game_passes(experience_id, page_token).await?;
             all_game_passes.extend(res.game_passes);
 
-            if res.next_page_token.is_none() {
+            if res
+                .next_page_token
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
                 break;
             }
 

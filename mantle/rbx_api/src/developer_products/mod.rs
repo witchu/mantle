@@ -125,7 +125,12 @@ impl RobloxApi {
                 .await?;
             all_products.extend(res.developer_products);
 
-            if res.next_page_token.is_none() {
+            if res
+                .next_page_token
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
                 break;
             }
 

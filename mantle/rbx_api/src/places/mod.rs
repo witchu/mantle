@@ -64,7 +64,12 @@ impl RobloxApi {
                 all_places.push(place);
             }
 
-            if res.next_page_cursor.is_none() {
+            if res
+                .next_page_cursor
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
                 break;
             }
 

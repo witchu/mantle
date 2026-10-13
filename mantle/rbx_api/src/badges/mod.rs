@@ -123,7 +123,12 @@ impl RobloxApi {
             let res = self.list_badges(experience_id, page_cursor).await?;
             all_badges.extend(res.data);
 
-            if res.next_page_cursor.is_none() {
+            if res
+                .next_page_cursor
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
                 break;
             }
 
