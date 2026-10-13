@@ -149,6 +149,10 @@ where
         }
     }
 
+    pub fn remove_resource(&mut self, resource_id: &str) -> Option<TResource> {
+        self.resources.remove(resource_id)
+    }
+
     pub fn get_outputs(&self, resource_id: &str) -> Option<TOutputs> {
         self.resources
             .get(resource_id)

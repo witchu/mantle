@@ -21,6 +21,31 @@ places.
 mantle deploy --environment staging --skip-place-files
 ```
 
+### Reconciling thumbnails
+
+If a deployment is interrupted (for example by Roblox rate limits), the experience's thumbnails on
+Roblox can drift from the state file. You may see extra or duplicate thumbnails, or deployments may
+fail with `One or more of the provided thumbnail ids are not valid`.
+
+Pass `--reconcile-thumbnails` to compare the thumbnail IDs on Roblox with the state file before
+deploying:
+
+- Thumbnails in the state file which no longer exist on Roblox are uploaded again, and the thumbnail
+  order is set again.
+- Thumbnails on Roblox which are not in the state file are reported.
+
+Pass `--prune-thumbnails` to also delete thumbnails on Roblox which are not in the state file. This
+implies `--reconcile-thumbnails`.
+
+```sh
+mantle deploy --environment staging --prune-thumbnails
+```
+
+<Callout type="warning">
+  `--prune-thumbnails` deletes every thumbnail which Mantle does not track, including thumbnails
+  uploaded manually through the Creator Dashboard.
+</Callout>
+
 ## Outputs
 
 If you want to know the ID of a resource which Mantle created so you can reference it in your game,

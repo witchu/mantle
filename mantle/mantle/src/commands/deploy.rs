@@ -7,7 +7,7 @@ use rbx_mantle::{
     project::{load_project, Project},
     resource_graph::{EvaluateResults, ResourceGraph},
     roblox_resource_manager::{RobloxInputs, RobloxOutputs, RobloxResource, RobloxResourceManager},
-    state::{get_desired_graph, save_state},
+    state::{self, get_desired_graph, save_state},
 };
 
 fn run_command(dir: PathBuf, command: &str) -> std::io::Result<std::process::Output> {
@@ -125,6 +125,8 @@ pub async fn run(
     environment: Option<&str>,
     allow_purchases: bool,
     skip_place_files: bool,
+    reconcile_thumbnails: bool,
+    prune_thumbnails: bool,
 ) -> i32 {
     logger::start_action("Loading project:");
     let (project_path, config) = match load_project_config(project) {
@@ -135,7 +137,7 @@ pub async fn run(
         }
     };
     let Project {
-        current_graph,
+        mut current_graph,
         mut state,
         environment_config,
         target_config,
@@ -172,6 +174,23 @@ pub async fn run(
             return 1;
         }
     };
+
+    if reconcile_thumbnails || prune_thumbnails {
+        logger::start_action("Reconciling thumbnails:");
+        match state::reconcile_thumbnails(
+            resource_manager.roblox_api(),
+            &mut current_graph,
+            prune_thumbnails,
+        )
+        .await
+        {
+            Ok(()) => logger::end_action("Succeeded"),
+            Err(e) => {
+                logger::end_action(Paint::red(e));
+                return 1;
+            }
+        }
+    }
 
     let skip_resource_prefixes: &[&str] = if skip_place_files {
         &["placeFile_"]

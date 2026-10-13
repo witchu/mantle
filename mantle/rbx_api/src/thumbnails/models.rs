@@ -6,6 +6,8 @@ use crate::models::AssetId;
 #[serde(rename_all = "camelCase")]
 pub struct GetExperienceThumbnailResponse {
     pub id: AssetId,
+    #[serde(default)]
+    pub asset_type: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]

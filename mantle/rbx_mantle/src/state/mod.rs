@@ -37,7 +37,7 @@ use super::{
         AssetTargetConfig, Config, EnvironmentConfig, ExperienceTargetConfig, OwnerConfig,
         PlayabilityTargetConfig, RemoteStateConfig, StateConfig, TargetConfig,
     },
-    resource_graph::ResourceGraph,
+    resource_graph::{Resource, ResourceGraph},
     roblox_resource_manager::*,
 };
 
@@ -573,6 +573,90 @@ pub fn get_desired_graph(
             get_desired_experience_graph(project_path, experience_target_config, owner_config)
         }
     }
+}
+
+/// Compares the experience's thumbnails on Roblox with the thumbnails in the previous graph.
+///
+/// Thumbnails in the graph which no longer exist on Roblox (stale) are removed from the graph, along
+/// with the thumbnail order, so that they are uploaded again and the order is set again. Thumbnails
+/// on Roblox which are not in the graph (orphans) are reported, and deleted if `prune` is true.
+pub async fn reconcile_thumbnails(
+    roblox_api: &RobloxApi,
+    previous_graph: &mut ResourceGraph<RobloxResource, RobloxInputs, RobloxOutputs>,
+    prune: bool,
+) -> Result<(), String> {
+    let experience_id = match previous_graph.get_outputs("experience_singleton") {
+        Some(RobloxOutputs::Experience(outputs)) => outputs.asset_id,
+        _ => {
+            logger::log("No existing experience to reconcile");
+            return Ok(());
+        }
+    };
+
+    let remote_ids: Vec<AssetId> = roblox_api
+        .get_experience_thumbnails(experience_id)
+        .await?
+        .into_iter()
+        .filter(|thumbnail| thumbnail.asset_type.as_deref().unwrap_or("Image") == "Image")
+        .map(|thumbnail| thumbnail.id)
+        .collect();
+
+    let tracked: Vec<(String, AssetId)> = previous_graph
+        .get_resource_list()
+        .into_iter()
+        .filter_map(|resource| match resource.get_outputs() {
+            Some(RobloxOutputs::ExperienceThumbnail(outputs)) => {
+                Some((resource.get_id(), outputs.asset_id))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let stale: Vec<&(String, AssetId)> = tracked
+        .iter()
+        .filter(|(_, asset_id)| !remote_ids.contains(asset_id))
+        .collect();
+    let orphans: Vec<AssetId> = remote_ids
+        .iter()
+        .filter(|id| !tracked.iter().any(|(_, asset_id)| asset_id == *id))
+        .copied()
+        .collect();
+
+    logger::log(format!(
+        "Found {} thumbnail(s) on Roblox and {} in state",
+        remote_ids.len(),
+        tracked.len()
+    ));
+
+    if !stale.is_empty() {
+        for (resource_id, asset_id) in stale.iter() {
+            logger::log(Paint::yellow(format!(
+                "Thumbnail {} ({}) no longer exists on Roblox and will be uploaded again",
+                asset_id, resource_id
+            )));
+            previous_graph.remove_resource(resource_id);
+        }
+        previous_graph.remove_resource("experienceThumbnailOrder_singleton");
+    }
+
+    for asset_id in orphans.iter() {
+        if prune {
+            logger::log(Paint::yellow(format!(
+                "Deleting thumbnail {} which is not in state",
+                asset_id
+            )));
+            roblox_api
+                .delete_experience_thumbnail(experience_id, *asset_id)
+                .await?;
+        } else {
+            logger::log(Paint::yellow(format!(
+                "Thumbnail {} is not in state. Use --prune-thumbnails to delete it.",
+                asset_id
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn import_graph(

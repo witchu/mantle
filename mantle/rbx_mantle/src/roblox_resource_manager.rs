@@ -378,6 +378,10 @@ impl RobloxResourceManager {
         })
     }
 
+    pub fn roblox_api(&self) -> &RobloxApi {
+        &self.roblox_api
+    }
+
     fn get_path<S: Into<String>>(&self, file: S) -> PathBuf {
         self.project_path.join(file.into())
     }
