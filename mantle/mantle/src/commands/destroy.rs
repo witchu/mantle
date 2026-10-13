@@ -51,7 +51,7 @@ pub async fn run(project: Option<&str>, environment: Option<&str>) -> i32 {
 
     let mut next_graph = ResourceGraph::new(&Vec::new());
     let results = next_graph
-        .evaluate(&current_graph, &mut resource_manager, false)
+        .evaluate(&current_graph, &mut resource_manager, false, &[])
         .await;
     match &results {
         Ok(results) => {

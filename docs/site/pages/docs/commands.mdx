@@ -10,6 +10,17 @@ elsewhere. To view the API of each command, run `mantle help [SUBCOMMAND]`.
 Deploy a Mantle project. For a detailed walkthrough, see the [Getting
 Started](/docs/getting-started#deploy-your-first-project) guide.
 
+### Skipping place files
+
+Pass `--skip-place-files` to deploy everything except place files. Place files are not published, and
+their previous versions are kept in the state file. This is useful when you only want to update
+configuration, thumbnails, products, and other resources without publishing a new version of your
+places.
+
+```sh
+mantle deploy --environment staging --skip-place-files
+```
+
 ## Outputs
 
 If you want to know the ID of a resource which Mantle created so you can reference it in your game,

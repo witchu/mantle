@@ -26,6 +26,10 @@ fn get_app() -> App<'static, 'static> {
                     Arg::with_name("allow_purchases")
                         .long("allow-purchases")
                         .help("Gives Mantle permission to make purchases with Robux."))
+                .arg(
+                    Arg::with_name("skip_place_files")
+                        .long("skip-place-files")
+                        .help("Skips publishing place files. Other resources are deployed as usual."))
         )
          .subcommand(
             SubCommand::with_name("diff")
@@ -175,6 +179,7 @@ pub async fn run_with(args: Vec<String>) -> i32 {
                 deploy_matches.value_of("PROJECT"),
                 deploy_matches.value_of("environment"),
                 deploy_matches.is_present("allow_purchases"),
+                deploy_matches.is_present("skip_place_files"),
             )
             .await
         }

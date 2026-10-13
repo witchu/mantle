@@ -361,10 +361,26 @@ where
         manager: &mut TManager,
         resource_id: &str,
         allow_purchases: bool,
+        skip_resource_prefixes: &[&str],
     ) -> OperationResult<TOutputs>
     where
         TManager: ResourceManager<TInputs, TOutputs>,
     {
+        if let Some(prefix) = skip_resource_prefixes
+            .iter()
+            .find(|prefix| resource_id.starts_with(*prefix))
+        {
+            logger::start_action(format!(
+                "{} Skipping: {}",
+                Paint::new("○").dimmed(),
+                resource_id
+            ));
+            return OperationResult::Skipped(format!(
+                "Resources with prefix '{}' were skipped by request.",
+                prefix
+            ));
+        }
+
         let resource = self.resources.get(resource_id).unwrap();
         let inputs_hash = resource.get_inputs_hash();
         let dependency_outputs = self.get_dependency_outputs(resource);
@@ -506,6 +522,7 @@ where
         previous_graph: &ResourceGraph<TResource, TInputs, TOutputs>,
         manager: &mut TManager,
         allow_purchases: bool,
+        skip_resource_prefixes: &[&str],
     ) -> Result<EvaluateResults, String>
     where
         TManager: ResourceManager<TInputs, TOutputs>,
@@ -536,7 +553,13 @@ where
         let resource_order = self.get_topological_order()?;
         for resource_id in resource_order.iter() {
             let operation_result = self
-                .evaluate_create_or_update(previous_graph, manager, resource_id, allow_purchases)
+                .evaluate_create_or_update(
+                    previous_graph,
+                    manager,
+                    resource_id,
+                    allow_purchases,
+                    skip_resource_prefixes,
+                )
                 .await;
             self.handle_operation_result(
                 &mut results,
@@ -679,4 +702,167 @@ pub struct ResourceDependencyChange {
     pub previous_outputs_hash: String,
     pub current_inputs_hash: String,
     pub changed_dependencies: Vec<ResourceId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    struct TestInputs(String);
+
+    #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+    struct TestOutputs(String);
+
+    #[derive(Clone)]
+    struct TestResource {
+        id: ResourceId,
+        inputs: TestInputs,
+        outputs: Option<TestOutputs>,
+        dependencies: Vec<ResourceId>,
+    }
+
+    impl TestResource {
+        fn new(id: &str, inputs: &str, outputs: Option<&str>, dependencies: &[&str]) -> Self {
+            Self {
+                id: id.to_owned(),
+                inputs: TestInputs(inputs.to_owned()),
+                outputs: outputs.map(|o| TestOutputs(o.to_owned())),
+                dependencies: dependencies.iter().map(|d| (*d).to_owned()).collect(),
+            }
+        }
+    }
+
+    impl Resource<TestInputs, TestOutputs> for TestResource {
+        fn get_id(&self) -> ResourceId {
+            self.id.clone()
+        }
+        fn get_inputs_hash(&self) -> String {
+            self.inputs.0.clone()
+        }
+        fn get_outputs_hash(&self) -> String {
+            self.outputs
+                .as_ref()
+                .map(|o| o.0.clone())
+                .unwrap_or_default()
+        }
+        fn get_inputs(&self) -> TestInputs {
+            self.inputs.clone()
+        }
+        fn get_outputs(&self) -> Option<TestOutputs> {
+            self.outputs.clone()
+        }
+        fn get_dependencies(&self) -> Vec<ResourceId> {
+            self.dependencies.clone()
+        }
+        fn set_outputs(&mut self, outputs: TestOutputs) {
+            self.outputs = Some(outputs);
+        }
+    }
+
+    /// Creates produce outputs equal to `out:<inputs>`. Inputs listed in `fail_create` fail.
+    #[derive(Default)]
+    struct TestManager {
+        fail_create: Vec<String>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ResourceManager<TestInputs, TestOutputs> for TestManager {
+        async fn get_create_price(
+            &self,
+            _inputs: TestInputs,
+            _dependency_outputs: Vec<TestOutputs>,
+        ) -> Result<Option<u32>, String> {
+            Ok(None)
+        }
+
+        async fn create(
+            &self,
+            inputs: TestInputs,
+            _dependency_outputs: Vec<TestOutputs>,
+            _price: Option<u32>,
+        ) -> Result<TestOutputs, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("create:{}", inputs.0));
+            if self.fail_create.contains(&inputs.0) {
+                return Err("429 Too Many Requests".to_owned());
+            }
+            Ok(TestOutputs(format!("out:{}", inputs.0)))
+        }
+
+        async fn get_update_price(
+            &self,
+            _inputs: TestInputs,
+            _outputs: TestOutputs,
+            _dependency_outputs: Vec<TestOutputs>,
+        ) -> Result<Option<u32>, String> {
+            Ok(None)
+        }
+
+        async fn update(
+            &self,
+            inputs: TestInputs,
+            _outputs: TestOutputs,
+            dependency_outputs: Vec<TestOutputs>,
+            price: Option<u32>,
+        ) -> Result<TestOutputs, String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("update:{}", inputs.0));
+            self.create(inputs, dependency_outputs, price).await
+        }
+
+        async fn delete(
+            &self,
+            outputs: TestOutputs,
+            _dependency_outputs: Vec<TestOutputs>,
+        ) -> Result<(), String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("delete:{}", outputs.0));
+            Ok(())
+        }
+    }
+
+    type TestGraph = ResourceGraph<TestResource, TestInputs, TestOutputs>;
+
+    #[tokio::test]
+    async fn skips_resources_matching_prefix() {
+        let previous = TestGraph::new(&[
+            TestResource::new("root", "root", Some("out:root"), &[]),
+            TestResource::new("placeFile_start", "v1", Some("out:v1"), &["root"]),
+        ]);
+        let mut next = TestGraph::new(&[
+            TestResource::new("root", "root", None, &[]),
+            TestResource::new("placeFile_start", "v2", None, &["root"]),
+            TestResource::new("placeFile_new", "v1", None, &["root"]),
+        ]);
+        let mut manager = TestManager::default();
+
+        let results = next
+            .evaluate(&previous, &mut manager, false, &["placeFile_"])
+            .await
+            .unwrap();
+
+        assert_eq!(results.skipped_count, 2);
+        assert!(manager.calls.lock().unwrap().is_empty());
+        // Existing resource keeps its previous state; new resource is not added
+        let resource = next.resources.get("placeFile_start").unwrap();
+        assert_eq!(resource.get_inputs(), TestInputs("v1".to_owned()));
+        assert_eq!(
+            resource.get_outputs(),
+            Some(TestOutputs("out:v1".to_owned()))
+        );
+        assert!(!next.resources.contains_key("placeFile_new"));
+    }
 }

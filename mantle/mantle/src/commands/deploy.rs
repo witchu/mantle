@@ -120,7 +120,12 @@ fn log_target_results(
     logger::end_action_without_message();
 }
 
-pub async fn run(project: Option<&str>, environment: Option<&str>, allow_purchases: bool) -> i32 {
+pub async fn run(
+    project: Option<&str>,
+    environment: Option<&str>,
+    allow_purchases: bool,
+    skip_place_files: bool,
+) -> i32 {
     logger::start_action("Loading project:");
     let (project_path, config) = match load_project_config(project) {
         Ok(v) => v,
@@ -168,8 +173,18 @@ pub async fn run(project: Option<&str>, environment: Option<&str>, allow_purchas
         }
     };
 
+    let skip_resource_prefixes: &[&str] = if skip_place_files {
+        &["placeFile_"]
+    } else {
+        &[]
+    };
     let results = next_graph
-        .evaluate(&current_graph, &mut resource_manager, allow_purchases)
+        .evaluate(
+            &current_graph,
+            &mut resource_manager,
+            allow_purchases,
+            skip_resource_prefixes,
+        )
         .await;
     match &results {
         Ok(results) => {
